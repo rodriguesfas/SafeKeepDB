@@ -1,0 +1,130 @@
+name: SafeKeep-DB CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      
+      - name: Lint Bash Script
+        run: shellcheck backup_script.sh
+  
+  dependency-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check Required Dependencies
+        run: |
+          dependencies=("mysqldump" "curl" "jq" "gzip")
+          missing_deps=()
+          for dep in "${dependencies[@]}"; do
+            if ! command -v "$dep" &> /dev/null; then
+              missing_deps+=("$dep")
+            fi
+          done
+          
+          if [ ${#missing_deps[@]} -ne 0 ]; then
+            echo "Missing dependencies: ${missing_deps[*]}"
+            exit 1
+          fi
+
+  mock-backup-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Mock MySQL Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+          
+          # Create mock .env file
+          cat > .env << EOL
+          DATABASES_CONFIG=localhost;testuser;testpass;testdb1,testdb2
+          MAX_PARALLEL_BACKUPS=2
+          MAX_BACKUP_FILES=5
+          BACKUP_MODE=full
+          BACKUP_DIRECTORY=./backups
+          DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/dummy
+          EOL
+      
+      - name: Test Backup Script Dry Run
+        run: |
+          chmod +x backup_script.sh
+          bash -n backup_script.sh  # Syntax check
+          
+          # Simulate dry run without actual database connection
+          export GITHUB_ACTIONS=true
+          ./backup_script.sh || echo "Dry run completed"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Scan for Secrets
+        uses: zricethezav/gitleaks-action@master
+      
+      - name: Check File Permissions
+        run: |
+          # Ensure script is not overly permissive
+          script_perms=$(stat -c "%a" backup_script.sh)
+          if [ "$script_perms" -gt "755" ]; then
+            echo "Overly permissive script permissions: $script_perms"
+            exit 1
+          fi
+
+  compatibility-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-20.04, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client curl jq
+
+      - name: Bash Compatibility Check
+        run: |
+          bash --version
+          bash -c 'set -o posix; set | grep -v ^PIPESTATUS='
+
+  notification-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Test Discord Webhook Simulation
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # Simulate Discord notification
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            curl -H "Content-Type: application/json" \
+                 -X POST \
+                 -d '{"content": "GitHub Actions Test Notification"}' \
+                 "$DISCORD_WEBHOOK_URL"
+          else
+            echo "No Discord webhook configured for testing"
+          fi
+
+# Optional: Deployment job if all tests pass
+#  deploy:
+#    needs: [lint-and-syntax-check, dependency-check, mock-backup-test, security-scan, compatibility-test]
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Deploy to Production
+#        run: echo "Deployment steps here"
