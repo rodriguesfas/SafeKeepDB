@@ -32,6 +32,18 @@ SafeKeep-DB is a robust, flexible MySQL database backup solution designed for mu
   - `jq`
   - `gzip`
 
+```bash
+sudo apt-get update
+sudo apt-get install curl jq gzip mariadb-client
+```
+
+or
+
+```bash
+# Install MySQL Client
+sudo apt-get install curl jq gzip mysql-client mariadb-client
+```
+
 ## 🚀 Quick Installation
 ```bash
 # Clone the repository
